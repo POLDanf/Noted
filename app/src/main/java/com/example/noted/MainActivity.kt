@@ -133,6 +133,8 @@ class MainActivity : ComponentActivity() {
 
             val systemInDarkTheme = isSystemInDarkTheme()
             var isDarkMode by remember { mutableStateOf(systemInDarkTheme) }
+            var showWordCount by remember { mutableStateOf(false) }
+            var showCharCount by remember { mutableStateOf(false) }
 
             val biometricLauncher = rememberAuthenticationLauncher { result ->
                 if (result is AuthenticationResult.Success) {
@@ -474,7 +476,11 @@ class MainActivity : ComponentActivity() {
                                         SettingsView(
                                             modifier = Modifier.fillMaxSize(),
                                             isDarkMode = isDarkMode,
-                                            onDarkModeChange = { isDarkMode = it }
+                                            onDarkModeChange = { isDarkMode = it },
+                                            showWordCount = showWordCount,
+                                            onShowWordCountChange = { showWordCount = it },
+                                            showCharCount = showCharCount,
+                                            onShowCharCountChange = { showCharCount = it }
                                         )
                                     }
                                     "Help & Feedback" -> {
@@ -839,7 +845,9 @@ class MainActivity : ComponentActivity() {
                                             currentPathPoints = editorViewModel.currentPathPoints,
                                             onCurrentPathPointsChange = { editorViewModel.currentPathPoints = it },
                                             strokeColor = editorViewModel.strokeColor,
-                                            isExporting = false
+                                            isExporting = false,
+                                            showWordCount = showWordCount,
+                                            showCharCount = showCharCount
                                         )
                                     }
                                 }
@@ -923,7 +931,9 @@ class MainActivity : ComponentActivity() {
                                     currentPathPoints = emptyList(),
                                     onCurrentPathPointsChange = {},
                                     strokeColor = Color.Black,
-                                    isExporting = true
+                                    isExporting = true,
+                                    showWordCount = false,
+                                    showCharCount = false
                                 )
                             }
                         }

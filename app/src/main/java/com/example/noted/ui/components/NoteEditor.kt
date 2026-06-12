@@ -11,9 +11,12 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -83,8 +86,22 @@ fun NoteContent(
     currentPathPoints: List<SerializablePathPoint>,
     onCurrentPathPointsChange: (List<SerializablePathPoint>) -> Unit = {},
     strokeColor: Color,
-    isExporting: Boolean = false
+    isExporting: Boolean = false,
+    showWordCount: Boolean = false,
+    showCharCount: Boolean = false
 ) {
+    val wordCount by remember(noteContent) {
+        androidx.compose.runtime.derivedStateOf {
+            if (noteContent.isBlank()) 0
+            else noteContent.trim().split("\\s+".toRegex()).size
+        }
+    }
+    val charCount by remember(noteContent) {
+        androidx.compose.runtime.derivedStateOf {
+            noteContent.length
+        }
+    }
+
     val metrics by remember(importedElements, isExporting, noteTitle) {
         androidx.compose.runtime.derivedStateOf {
             var minX = 0f
@@ -410,6 +427,33 @@ fun NoteContent(
 
                         drawingPlaceable.placeRelative(0, 0)
                     }
+                }
+            }
+        }
+
+        if (!isExporting && (showWordCount || showCharCount)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, end = 8.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                if (showWordCount) {
+                    Text(
+                        text = "$wordCount words",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (showWordCount && showCharCount) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                if (showCharCount) {
+                    Text(
+                        text = "$charCount characters",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }

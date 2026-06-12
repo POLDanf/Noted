@@ -27,7 +27,11 @@ import androidx.compose.ui.unit.dp
 fun SettingsView(
     modifier: Modifier = Modifier,
     isDarkMode: Boolean,
-    onDarkModeChange: (Boolean) -> Unit
+    onDarkModeChange: (Boolean) -> Unit,
+    showWordCount: Boolean,
+    onShowWordCountChange: (Boolean) -> Unit,
+    showCharCount: Boolean,
+    onShowCharCountChange: (Boolean) -> Unit
 ) {
     var cloudSync by remember { mutableStateOf(false) }
     var wifiOnly by remember { mutableStateOf(false) }
@@ -38,8 +42,6 @@ fun SettingsView(
     var reminderNotifs by remember { mutableStateOf(true) }
     var vibration by remember { mutableStateOf(true) }
     var highContrast by remember { mutableStateOf(false) }
-    var showWordCount by remember { mutableStateOf(false) }
-    var showCharCount by remember { mutableStateOf(false) }
     var autosave by remember { mutableStateOf(false) }
 
     Column(modifier = modifier) {
@@ -58,8 +60,8 @@ fun SettingsView(
             item { SettingClickableRow("Font Size") }
             item { SettingClickableRow("Font Family") }
             item { SettingSwitchRow("AutoSave", checked = autosave) { autosave = it } }
-            item { SettingSwitchRow("Show Word Count", showWordCount) { showWordCount = it } }
-            item { SettingSwitchRow("Show Character Count", checked = showCharCount) { showCharCount = it } }
+            item { SettingSwitchRow("Show Word Count", showWordCount) { onShowWordCountChange(it) } }
+            item { SettingSwitchRow("Show Character Count", checked = showCharCount) { onShowCharCountChange(it) } }
 
             item { Spacer(modifier = Modifier.height(16.dp)) }
 
