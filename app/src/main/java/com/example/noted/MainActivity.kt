@@ -1,15 +1,12 @@
 package com.example.noted
 
-import android.content.ContentValues
-import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.pdf.PdfDocument
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.MediaStore
 import android.widget.Toast
 import kotlin.OptIn
+import androidx.biometric.AuthenticationRequest
+import androidx.biometric.AuthenticationResult
+import androidx.biometric.compose.rememberAuthenticationLauncher
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,7 +15,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -33,10 +29,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -52,15 +54,13 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberDrawerState
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,55 +70,139 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.noted.ui.theme.NotedTheme
 import dev.shreyaspatil.capturable.capturable
-import dev.shreyaspatil.capturable.controller.CaptureController
 import dev.shreyaspatil.capturable.controller.rememberCaptureController
 import kotlinx.coroutines.launch
-import java.io.File
-import java.io.FileOutputStream
-import java.io.OutputStream
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.ui.geometry.Offset
+import com.example.noted.ui.screens.SettingsView
+import com.example.noted.ui.screens.HelpFeedbackView
+import com.example.noted.ui.components.NoteContent
+import com.example.noted.utils.copyUriToInternalStorage
+import com.example.noted.utils.saveAsPng
+import com.example.noted.utils.saveAsPdf
+import com.example.noted.utils.saveAsText
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
+import com.example.noted.utils.NotificationHelper
+import androidx.compose.runtime.LaunchedEffect
+
 
 class MainActivity : ComponentActivity() {
-    @OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current
+
+            LaunchedEffect(Unit) {
+                NotificationHelper.createChannels(context)
+            }
+
             val captureController = rememberCaptureController()
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
             val scope = rememberCoroutineScope()
             val noteViewModel: NoteViewModel = viewModel()
+            val editorViewModel: NoteEditorViewModel = viewModel()
             val notes by noteViewModel.allNotes.collectAsState()
             val trashNotes by noteViewModel.trashNotes.collectAsState()
             val favouriteNotes by noteViewModel.favouriteNotes.collectAsState()
+            val archivedNotes by noteViewModel.archivedNotes.collectAsState()
+            val secureNotes by noteViewModel.secureNotes.collectAsState()
+            val reminderNotes by noteViewModel.reminderNotes.collectAsState()
 
-            var currentView by remember { mutableStateOf("Notes") }
-            var isAddingNote by remember { mutableStateOf(false) }
-            var editingNote by remember { mutableStateOf<Note?>(null) }
-            var noteTitle by remember { mutableStateOf("") }
-            var noteContent by remember { mutableStateOf("") }
+            val currentViewState = remember { mutableStateOf("Notes") }
+            var currentView by currentViewState
+
+            val systemInDarkTheme = isSystemInDarkTheme()
+            var isDarkMode by remember { mutableStateOf(systemInDarkTheme) }
+
+            val biometricLauncher = rememberAuthenticationLauncher { result ->
+                if (result is AuthenticationResult.Success) {
+                    currentViewState.value = "Secure"
+                    scope.launch { drawerState.close() }
+                }
+            }
+
+            val filePickerLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocument(),
+                onResult = { uri ->
+                    uri?.let {
+                        context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        val mimeType = context.contentResolver.getType(it) ?: ""
+
+                        val internalUri = copyUriToInternalStorage(context, it) ?: it.toString()
+
+                        val lastElement = editorViewModel.importedElements.lastOrNull()
+                        val startX = -editorViewModel.panOffset.x + 100f
+                        val startY = if (lastElement != null) {
+                            lastElement.y + (if (lastElement.height > 0) lastElement.height else 200f) + 40f
+                        } else {
+                            -editorViewModel.panOffset.y + 100f
+                        }
+
+                        when {
+                            mimeType.contains("pdf") -> {
+                                editorViewModel.importedElements = editorViewModel.importedElements + NoteElement(
+                                    uri = internalUri,
+                                    x = startX,
+                                    y = startY,
+                                    type = "pdf"
+                                )
+                            }
+                            mimeType.contains("image") -> {
+                                editorViewModel.importedElements = editorViewModel.importedElements + NoteElement(
+                                    uri = internalUri,
+                                    x = startX,
+                                    y = startY,
+                                    type = "image"
+                                )
+                            }
+                            mimeType.contains("text/plain") -> {
+                                try {
+                                    val content = context.contentResolver.openInputStream(it)?.use { stream ->
+                                        stream.bufferedReader().readText()
+                                    } ?: ""
+                                    editorViewModel.importedElements = editorViewModel.importedElements + NoteElement(
+                                        text = content,
+                                        x = startX,
+                                        y = startY,
+                                        type = "text"
+                                    )
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                    Toast.makeText(context, "Failed to read text file", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    }
+                }
+            )
 
             var showSharePopup by remember { mutableStateOf(false) }
+            var exportTarget by remember { mutableStateOf<Note?>(null) }
 
-            var showExportPopup by remember {mutableStateOf(false)}
-            var noteToExport by remember { mutableStateOf<Note?>(null) }
-
-            NotedTheme {
+            NotedTheme(darkTheme = isDarkMode) {
                 ModalNavigationDrawer(
                     drawerState = drawerState,
-                    gesturesEnabled = !isAddingNote && editingNote == null,
+                    gesturesEnabled = !editorViewModel.isAddingNote && editorViewModel.editingNote == null,
                     drawerContent = {
                         ModalDrawerSheet {
                             Box(
@@ -134,9 +218,7 @@ class MainActivity : ComponentActivity() {
                                     Button(
                                         onClick = {
                                             currentView = "Notes"
-                                            scope.launch {
-                                                drawerState.close()
-                                            }
+                                            scope.launch { drawerState.close() }
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.buttonColors(
@@ -157,10 +239,30 @@ class MainActivity : ComponentActivity() {
                                     }
                                     Button(
                                         onClick = {
+                                            currentView = "Reminders"
+                                            scope.launch { drawerState.close() }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (currentView == "Reminders") MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                            contentColor = if (currentView == "Reminders") MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onBackground
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.Start,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.Notifications, contentDescription = "Reminders")
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text("Reminders")
+                                        }
+                                    }
+                                    Button(
+                                        onClick = {
                                             currentView = "Favourites"
-                                            scope.launch {
-                                                drawerState.close()
-                                            }
+                                            scope.launch { drawerState.close() }
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.buttonColors(
@@ -181,12 +283,50 @@ class MainActivity : ComponentActivity() {
                                     }
                                     Button(
                                         onClick = {
+                                            currentView = "Archive"
                                             scope.launch { drawerState.close() }
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color.Transparent,
-                                            contentColor = MaterialTheme.colorScheme.onBackground
+                                            containerColor = if (currentView == "Archive") MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                            contentColor = if (currentView == "Archive") MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onBackground
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.Start,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.Archive, contentDescription = "Archive")
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text("Archive")
+                                        }
+                                    }
+                                    Button(
+                                        onClick = {
+                                            val authRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                                AuthenticationRequest.biometricRequest(
+                                                    title = "Secure Access",
+                                                    AuthenticationRequest.Biometric.Fallback.DeviceCredential
+                                                ) {
+                                                    setSubtitle("Authenticate to view secure notes")
+                                                    setMinStrength(AuthenticationRequest.Biometric.Strength.Class2)
+                                                }
+                                            } else {
+                                                AuthenticationRequest.biometricRequest(
+                                                    title = "Secure Access"
+                                                ) {
+                                                    setSubtitle("Authenticate to view secure notes")
+                                                    setMinStrength(AuthenticationRequest.Biometric.Strength.Class2)
+                                                }
+                                            }
+                                            biometricLauncher.launch(authRequest)
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (currentView == "Secure") MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                            contentColor = if (currentView == "Secure") MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onBackground
                                         ),
                                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                                     ) {
@@ -203,9 +343,7 @@ class MainActivity : ComponentActivity() {
                                     Button(
                                         onClick = {
                                             currentView = "Trash"
-                                            scope.launch{
-                                                drawerState.close()
-                                            }
+                                            scope.launch { drawerState.close() }
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.buttonColors(
@@ -227,9 +365,7 @@ class MainActivity : ComponentActivity() {
                                     Button(
                                         onClick = {
                                             currentView = "Settings"
-                                            scope.launch {
-                                                drawerState.close()
-                                            }
+                                            scope.launch { drawerState.close() }
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.buttonColors(
@@ -251,9 +387,7 @@ class MainActivity : ComponentActivity() {
                                     Button(
                                         onClick = {
                                             currentView = "Help & Feedback"
-                                            scope.launch{
-                                                drawerState.close()
-                                            }
+                                            scope.launch { drawerState.close() }
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.buttonColors(
@@ -267,12 +401,11 @@ class MainActivity : ComponentActivity() {
                                             horizontalArrangement = Arrangement.Start,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Icon(Icons.Default.Settings, contentDescription = "Help")
+                                            Icon(Icons.Default.Info, contentDescription = "Help")
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Text("Help & Feedback")
                                         }
                                     }
-
                                 }
                             }
                         }
@@ -286,7 +419,7 @@ class MainActivity : ComponentActivity() {
                                 .fillMaxSize()
                                 .padding(innerPadding)
                         ) {
-                            if (!isAddingNote && editingNote == null) {
+                            if (!editorViewModel.isAddingNote && editorViewModel.editingNote == null) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -300,9 +433,7 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             IconButton(onClick = {
-                                                scope.launch {
-                                                    drawerState.open()
-                                                }
+                                                scope.launch { drawerState.open() }
                                             }) {
                                                 Icon(Icons.Default.Menu, contentDescription = "Menu")
                                             }
@@ -313,16 +444,14 @@ class MainActivity : ComponentActivity() {
                                             )
                                         }
                                         Row {
-                                            IconButton(onClick = {
-
-                                            }) {
-                                                Icon(Icons.Default.Search, contentDescription = "Search")
-                                            }
-                                            if (currentView == "Notes" || currentView == "Favourites") {
+                                            val isNoteView = currentView == "Notes" || currentView == "Favourites" ||
+                                                    currentView == "Archive" || currentView == "Secure"
+                                            if (isNoteView) {
+                                                IconButton(onClick = { /* search logic */ }) {
+                                                    Icon(Icons.Default.Search, contentDescription = "Search")
+                                                }
                                                 IconButton(onClick = {
-                                                    isAddingNote = true
-                                                    noteTitle = ""
-                                                    noteContent = ""
+                                                    editorViewModel.startNewNote()
                                                 }) {
                                                     Icon(Icons.Default.Add, contentDescription = "Add")
                                                 }
@@ -334,158 +463,218 @@ class MainActivity : ComponentActivity() {
                                 val displayNotes = when (currentView) {
                                     "Notes" -> notes
                                     "Favourites" -> favouriteNotes
+                                    "Archive" -> archivedNotes
+                                    "Secure" -> secureNotes
+                                    "Reminders" -> reminderNotes
                                     else -> trashNotes
                                 }
 
-                                if (currentView == "Settings") {
-                                    SettingsView(modifier = Modifier.fillMaxSize())
-                                } else if (currentView == "Help & Feedback") {
-                                    HelpFeedbackView(modifier = Modifier.fillMaxSize())
-                                } else {
-                                    HorizontalDivider()
-                                    LazyColumn(
-                                        modifier = Modifier.fillMaxSize()
-                                    ) {
-                                        items(displayNotes) { note ->
-                                            Button(
-                                                onClick = {
-                                                    editingNote = note
-                                                    noteTitle = note.title
-                                                    noteContent = note.content
-                                                },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                colors = ButtonDefaults.buttonColors(
-                                                    containerColor = Color.Transparent,
-                                                    contentColor = MaterialTheme.colorScheme.onBackground
-                                                ),
-                                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 1.dp)
-                                            ) {
-                                                Row(
+                                when (currentView) {
+                                    "Settings" -> {
+                                        SettingsView(
+                                            modifier = Modifier.fillMaxSize(),
+                                            isDarkMode = isDarkMode,
+                                            onDarkModeChange = { isDarkMode = it }
+                                        )
+                                    }
+                                    "Help & Feedback" -> {
+                                        HelpFeedbackView(modifier = Modifier.fillMaxSize())
+                                    }
+                                    else -> {
+                                        HorizontalDivider()
+                                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                            items(displayNotes) { note ->
+                                                Button(
+                                                    onClick = { editorViewModel.loadNote(note) },
                                                     modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                                    verticalAlignment = Alignment.CenterVertically
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        containerColor = Color.Transparent,
+                                                        contentColor = MaterialTheme.colorScheme.onBackground
+                                                    ),
+                                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 1.dp)
                                                 ) {
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        Text(
-                                                            text = note.title,
-                                                            style = MaterialTheme.typography.bodyLarge
-                                                        )
-                                                        if (note.favourite) {
-                                                            Spacer(modifier = Modifier.width(8.dp))
-                                                            Icon(
-                                                                Icons.Default.Star,
-                                                                contentDescription = "Favourite",
-                                                                tint = Color(0xFFFFD700),
-                                                                modifier = Modifier.height(16.dp)
-                                                            )
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                                Text(
+                                                                    text = note.title,
+                                                                    style = MaterialTheme.typography.bodyLarge
+                                                                )
+                                                                if (note.favourite) {
+                                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                                    Icon(
+                                                                        Icons.Default.Star,
+                                                                        contentDescription = "Favourite",
+                                                                        tint = Color(0xFFFFD700),
+                                                                        modifier = Modifier.height(16.dp)
+                                                                    )
+                                                                }
+                                                            }
+                                                            note.reminderTime?.let { time ->
+                                                                val sdf = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
+                                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                                    Icon(
+                                                                        Icons.Default.Notifications,
+                                                                        contentDescription = null,
+                                                                        modifier = Modifier.height(12.dp),
+                                                                        tint = MaterialTheme.colorScheme.primary
+                                                                    )
+                                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                                    Text(
+                                                                        text = sdf.format(time),
+                                                                        style = MaterialTheme.typography.bodySmall,
+                                                                        color = MaterialTheme.colorScheme.primary
+                                                                    )
+                                                                }
+                                                            }
                                                         }
-                                                    }
 
-                                                    var showMenu by remember { mutableStateOf(false) }
+                                                        var showMenu by remember { mutableStateOf(false) }
 
-                                                    Box {
-                                                        IconButton(
-                                                            onClick = { showMenu = true }
-                                                        ) {
-                                                            Icon(Icons.Default.MoreVert, contentDescription = "More")
-                                                        }
-                                                        DropdownMenu(
-                                                            expanded = showMenu,
-                                                            onDismissRequest = { showMenu = false }
-                                                        ) {
-                                                            if (currentView == "Notes") {
+                                                        Box {
+                                                            IconButton(onClick = { showMenu = true }) {
+                                                                Icon(Icons.Default.MoreVert, contentDescription = "More")
+                                                            }
+                                                            DropdownMenu(
+                                                                expanded = showMenu,
+                                                                onDismissRequest = { showMenu = false }
+                                                            ) {
+                                                                if (currentView == "Notes" || currentView == "Favourites") {
+                                                                    DropdownMenuItem(
+                                                                        text = { Text("Secure") },
+                                                                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = "Secure") },
+                                                                        onClick = {
+                                                                            noteViewModel.updateNote(note.copy(secure = true))
+                                                                            showMenu = false
+                                                                        }
+                                                                    )
+                                                                    DropdownMenuItem(
+                                                                        text = { Text("Archive") },
+                                                                        leadingIcon = { Icon(Icons.Default.Archive, contentDescription = "Archive") },
+                                                                        onClick = {
+                                                                            noteViewModel.updateNote(note.copy(archived = true))
+                                                                            showMenu = false
+                                                                        }
+                                                                    )
+                                                                    DropdownMenuItem(
+                                                                        text = { Text("Move to Trash") },
+                                                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = "Trash") },
+                                                                        onClick = {
+                                                                            noteViewModel.updateNote(note.copy(trash = true))
+                                                                            showMenu = false
+                                                                        }
+                                                                    )
+                                                                } else if (currentView == "Archive") {
+                                                                    DropdownMenuItem(
+                                                                        text = { Text("Unarchive") },
+                                                                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = "Unarchive") },
+                                                                        onClick = {
+                                                                            noteViewModel.updateNote(note.copy(archived = false))
+                                                                            showMenu = false
+                                                                        }
+                                                                    )
+                                                                    DropdownMenuItem(
+                                                                        text = { Text("Move to Trash") },
+                                                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = "Trash") },
+                                                                        onClick = {
+                                                                            noteViewModel.updateNote(note.copy(trash = true))
+                                                                            showMenu = false
+                                                                        }
+                                                                    )
+                                                                } else if (currentView == "Secure") {
+                                                                    DropdownMenuItem(
+                                                                        text = { Text("Unsecure") },
+                                                                        leadingIcon = { Icon(Icons.Default.LockOpen, contentDescription = "Unsecure") },
+                                                                        onClick = {
+                                                                            noteViewModel.updateNote(note.copy(secure = false))
+                                                                            showMenu = false
+                                                                        }
+                                                                    )
+                                                                    DropdownMenuItem(
+                                                                        text = { Text("Move to Trash") },
+                                                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = "Trash") },
+                                                                        onClick = {
+                                                                            noteViewModel.updateNote(note.copy(trash = true))
+                                                                            showMenu = false
+                                                                        }
+                                                                    )
+                                                                } else {
+                                                                    // Trash view
+                                                                    DropdownMenuItem(
+                                                                        text = { Text("Restore") },
+                                                                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = "Restore") },
+                                                                        onClick = {
+                                                                            noteViewModel.updateNote(note.copy(trash = false))
+                                                                            showMenu = false
+                                                                        }
+                                                                    )
+                                                                    DropdownMenuItem(
+                                                                        text = { Text("Delete Permanently") },
+                                                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = "Delete") },
+                                                                        onClick = {
+                                                                            noteViewModel.deleteNote(note)
+                                                                            showMenu = false
+                                                                        }
+                                                                    )
+                                                                }
+
+                                                                if (note.reminderTime != null) {
+                                                                    DropdownMenuItem(
+                                                                        text = { Text("Clear Reminder") },
+                                                                        leadingIcon = { Icon(Icons.Default.Notifications, contentDescription = "Clear Reminder") },
+                                                                        onClick = {
+                                                                            noteViewModel.updateNote(note.copy(reminderTime = null))
+                                                                            showMenu = false
+                                                                        }
+                                                                    )
+                                                                }
+
                                                                 DropdownMenuItem(
-                                                                    text = { Text("Move to Trash") },
-                                                                    leadingIcon = {
-                                                                        Icon(
-                                                                            Icons.Default.Delete,
-                                                                            contentDescription = "Trash"
-                                                                        )
-                                                                    },
+                                                                    text = { Text("Share") },
+                                                                    leadingIcon = { Icon(Icons.Default.Share, contentDescription = "Share") },
                                                                     onClick = {
-                                                                        noteViewModel.updateNote(note.copy(trash = true))
+                                                                        exportTarget = note
+                                                                        showSharePopup = true
                                                                         showMenu = false
                                                                     }
                                                                 )
-                                                            } else {
+
                                                                 DropdownMenuItem(
-                                                                    text = { Text("Restore") },
+                                                                    text = { Text(if (note.favourite) "Unstar" else "Star") },
                                                                     leadingIcon = {
                                                                         Icon(
-                                                                            Icons.Default.Refresh,
-                                                                            contentDescription = "Restore"
+                                                                            if (note.favourite) Icons.Default.Star else Icons.Outlined.StarBorder,
+                                                                            contentDescription = if (note.favourite) "Unstar" else "Star",
+                                                                            tint = if (note.favourite) Color(0xFFFFD700) else MaterialTheme.colorScheme.onSurfaceVariant
                                                                         )
                                                                     },
                                                                     onClick = {
-                                                                        noteViewModel.updateNote(note.copy(trash = false))
+                                                                        noteViewModel.updateNote(note.copy(favourite = !note.favourite))
                                                                         showMenu = false
                                                                     }
                                                                 )
+
                                                                 DropdownMenuItem(
-                                                                    text = { Text("Delete Permanently") },
-                                                                    leadingIcon = {
-                                                                        Icon(
-                                                                            Icons.Default.Delete,
-                                                                            contentDescription = "Delete"
-                                                                        )
-                                                                    },
+                                                                    text = { Text("Export") },
+                                                                    leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = "Export") },
                                                                     onClick = {
-                                                                        noteViewModel.deleteNote(note)
+                                                                        exportTarget = note
                                                                         showMenu = false
                                                                     }
                                                                 )
                                                             }
-                                                            DropdownMenuItem(
-                                                                text = { Text("Share") },
-                                                                leadingIcon = {
-                                                                    Icon(
-                                                                        Icons.Default.Share,
-                                                                        contentDescription = "Share"
-                                                                    )
-                                                                },
-                                                                onClick = {
-                                                                    showSharePopup = true
-                                                                    showMenu = false
-                                                                }
-                                                            )
-                                                            DropdownMenuItem(
-                                                                text = { Text(if (note.favourite) "Unstar" else "Star") },
-                                                                leadingIcon = {
-                                                                    Icon(
-                                                                        if (note.favourite) Icons.Default.Star else Icons.Default.Star, // Could use a border icon if unstarred
-                                                                        contentDescription = "Star",
-                                                                        tint = if (note.favourite) Color(0xFFFFD700) else MaterialTheme.colorScheme.onSurfaceVariant
-                                                                    )
-                                                                },
-                                                                onClick = {
-                                                                    noteViewModel.updateNote(note.copy(favourite = !note.favourite))
-                                                                    showMenu = false
-                                                                }
-                                                            )
-                                                            DropdownMenuItem(
-                                                                text = {Text("Export")},
-                                                                leadingIcon = {
-                                                                    Icon(
-                                                                        Icons.Default.PlayArrow,
-                                                                        contentDescription = "Export"
-                                                                    )
-                                                                },
-                                                                onClick = {
-                                                                    noteToExport = note
-                                                                    showExportPopup = true
-                                                                    showMenu = false
-                                                                }
-                                                            )
                                                         }
                                                     }
                                                 }
-
                                             }
                                         }
                                     }
                                 }
                             } else {
-                                // Add/Edit Note Screen
                                 Column(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -496,103 +685,190 @@ class MainActivity : ComponentActivity() {
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        IconButton(onClick = { editorViewModel.reset() }) {
+                                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                                        }
+                                        Box {
+                                            IconButton(onClick = {
+                                                if (editorViewModel.isDrawingMode) {
+                                                    editorViewModel.showToolMenu = !editorViewModel.showToolMenu
+                                                } else {
+                                                    editorViewModel.isDrawingMode = true
+                                                    editorViewModel.currentTool = "Pen"
+                                                }
+                                            }) {
+                                                Icon(
+                                                    Icons.Default.Build,
+                                                    contentDescription = "Drawing Tools",
+                                                    tint = if (editorViewModel.isDrawingMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                            DropdownMenu(
+                                                expanded = editorViewModel.showToolMenu,
+                                                onDismissRequest = { editorViewModel.showToolMenu = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Pen") },
+                                                    onClick = {
+                                                        editorViewModel.currentTool = "Pen"
+                                                        editorViewModel.showToolMenu = false
+                                                    },
+                                                    leadingIcon = {
+                                                        if (editorViewModel.currentTool == "Pen") Icon(Icons.Default.Check, contentDescription = null)
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Eraser") },
+                                                    onClick = {
+                                                        editorViewModel.currentTool = "Eraser"
+                                                        editorViewModel.showToolMenu = false
+                                                    },
+                                                    leadingIcon = {
+                                                        if (editorViewModel.currentTool == "Eraser") Icon(Icons.Default.Check, contentDescription = null)
+                                                    }
+                                                )
+                                                HorizontalDivider()
+                                                DropdownMenuItem(
+                                                    text = { Text("Disable Drawing") },
+                                                    onClick = {
+                                                        editorViewModel.isDrawingMode = false
+                                                        editorViewModel.showToolMenu = false
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Clear All Drawings") },
+                                                    onClick = {
+                                                        editorViewModel.importedElements = editorViewModel.importedElements.filter { it.type != "path" && it.type != "eraser" }
+                                                        editorViewModel.showToolMenu = false
+                                                    },
+                                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) }
+                                                )
+                                            }
+                                        }
+
                                         IconButton(onClick = {
-                                            isAddingNote = false
-                                            editingNote = null
-                                            noteTitle = ""
-                                            noteContent = ""
+                                            val calendar = Calendar.getInstance()
+                                            editorViewModel.reminderTime?.let { calendar.timeInMillis = it }
+                                            
+                                            DatePickerDialog(
+                                                context,
+                                                { _, year, month, dayOfMonth ->
+                                                    calendar.set(Calendar.YEAR, year)
+                                                    calendar.set(Calendar.MONTH, month)
+                                                    calendar.set(Calendar.DAY_OF_MONTH, dayOfMonth)
+                                                    
+                                                    TimePickerDialog(
+                                                        context,
+                                                        { _, hourOfDay, minute ->
+                                                            calendar.set(Calendar.HOUR_OF_DAY, hourOfDay)
+                                                            calendar.set(Calendar.MINUTE, minute)
+                                                            calendar.set(Calendar.SECOND, 0)
+                                                            editorViewModel.reminderTime = calendar.timeInMillis
+                                                        },
+                                                        calendar.get(Calendar.HOUR_OF_DAY),
+                                                        calendar.get(Calendar.MINUTE),
+                                                        false
+                                                    ).show()
+                                                },
+                                                calendar.get(Calendar.YEAR),
+                                                calendar.get(Calendar.MONTH),
+                                                calendar.get(Calendar.DAY_OF_MONTH)
+                                            ).show()
                                         }) {
                                             Icon(
-                                                Icons.AutoMirrored.Filled.ArrowBack,
-                                                contentDescription = "Back"
+                                                Icons.Default.Notifications,
+                                                contentDescription = "Set Reminder",
+                                                tint = if (editorViewModel.reminderTime != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                             )
                                         }
 
                                         IconButton(onClick = {
-                                            if (noteTitle.isNotBlank() || noteContent.isNotBlank()) {
-                                                val currentNote = editingNote
+                                            filePickerLauncher.launch(arrayOf("image/*", "application/pdf", "text/plain"))
+                                        }) {
+                                            Icon(Icons.Default.Add, contentDescription = "Import")
+                                        }
+
+                                        IconButton(onClick = {
+                                            if (editorViewModel.noteTitle.isNotBlank() || editorViewModel.noteContent.isNotBlank() || editorViewModel.importedElements.isNotEmpty()) {
+                                                val currentNote = editorViewModel.editingNote
                                                 if (currentNote != null) {
                                                     noteViewModel.updateNote(
                                                         currentNote.copy(
-                                                            title = noteTitle,
-                                                            content = noteContent
+                                                            title = editorViewModel.noteTitle,
+                                                            content = editorViewModel.noteContent,
+                                                            elements = editorViewModel.importedElements,
+                                                            reminderTime = editorViewModel.reminderTime
                                                         )
                                                     )
                                                 } else {
-                                                    noteViewModel.addNote(noteTitle, noteContent)
+                                                    noteViewModel.addNote(
+                                                        editorViewModel.noteTitle,
+                                                        editorViewModel.noteContent,
+                                                        editorViewModel.importedElements,
+                                                        secure = currentView == "Secure",
+                                                        reminderTime = editorViewModel.reminderTime
+                                                    )
                                                 }
                                             }
-                                            isAddingNote = false
-                                            editingNote = null
-                                            noteTitle = ""
-                                            noteContent = ""
+                                            editorViewModel.reset()
                                         }) {
                                             Icon(Icons.Default.Check, contentDescription = "Save")
                                         }
                                     }
 
-                                    TextField(
-                                        value = noteTitle,
-                                        onValueChange = { noteTitle = it },
-                                        placeholder = {
-                                            Text(
-                                                "Title",
-                                                style = MaterialTheme.typography.headlineMedium
-                                            )
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = TextFieldDefaults.colors(
-                                            focusedContainerColor = Color.Transparent,
-                                            unfocusedContainerColor = Color.Transparent,
-                                            disabledContainerColor = Color.Transparent,
-                                            focusedIndicatorColor = Color.Transparent,
-                                            unfocusedIndicatorColor = Color.Transparent
-                                        ),
-                                        textStyle = MaterialTheme.typography.headlineMedium
-                                    )
-
-                                    TextField(
-                                        value = noteContent,
-                                        onValueChange = { noteContent = it },
-                                        placeholder = { Text("Note content") },
+                                    Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .weight(1f),
-                                        colors = TextFieldDefaults.colors(
-                                            focusedContainerColor = Color.Transparent,
-                                            unfocusedContainerColor = Color.Transparent,
-                                            disabledContainerColor = Color.Transparent,
-                                            focusedIndicatorColor = Color.Transparent,
-                                            unfocusedIndicatorColor = Color.Transparent
-                                        ),
-                                        textStyle = MaterialTheme.typography.bodyLarge
-                                    )
+                                            .weight(1f)
+                                            .clipToBounds()
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f))
+                                    ) {
+                                        NoteContent(
+                                            noteTitle = editorViewModel.noteTitle,
+                                            onNoteTitleChange = { editorViewModel.noteTitle = it },
+                                            noteContent = editorViewModel.noteContent,
+                                            onNoteContentChange = { editorViewModel.noteContent = it },
+                                            importedElements = editorViewModel.importedElements,
+                                            onImportedElementsChange = { editorViewModel.importedElements = it },
+                                            panOffset = editorViewModel.panOffset,
+                                            onPanOffsetChange = { editorViewModel.panOffset = it },
+                                            zoomScale = editorViewModel.zoomScale,
+                                            onZoomScaleChange = { editorViewModel.zoomScale = it },
+                                            isDrawingMode = editorViewModel.isDrawingMode,
+                                            currentTool = editorViewModel.currentTool,
+                                            currentPathPoints = editorViewModel.currentPathPoints,
+                                            onCurrentPathPointsChange = { editorViewModel.currentPathPoints = it },
+                                            strokeColor = editorViewModel.strokeColor,
+                                            isExporting = false
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+
+            // Share popup
             if (showSharePopup) {
                 Popup(
                     alignment = Alignment.Center,
-                    onDismissRequest = { showSharePopup = false }
+                    onDismissRequest = {
+                        showSharePopup = false
+                    }
                 ) {
                     Box(
                         modifier = Modifier
                             .width(240.dp)
                             .shadow(8.dp, MaterialTheme.shapes.medium)
                             .background(MaterialTheme.colorScheme.surface, MaterialTheme.shapes.medium)
-                            .border(
-                                width = 1.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant,
-                                shape = MaterialTheme.shapes.medium
-                            )
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
                             .padding(16.dp)
                     ) {
                         Column {
                             Text(
-                                "Share Note",
+                                // FIX 3: Show the target note's title in the share header for clarity.
+                                "Share \"${exportTarget?.title ?: "Note"}\"",
                                 style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier.padding(bottom = 8.dp)
                             )
@@ -613,48 +889,57 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if (showExportPopup) {
+
+            if (exportTarget != null) {
                 Box(
                     modifier = Modifier
-                        .alpha(0f)
-                        .width(IntrinsicSize.Max)
-                        .capturable(captureController)
-                        .background(MaterialTheme.colorScheme.surface)
-                        .padding(16.dp)
+                        .offset { IntOffset(-10000, -10000) }
+                        .wrapContentSize(unbounded = true)
+                        .background(Color.White)
                 ) {
-                    noteToExport?.let { note ->
-                        Column(
-                            modifier = Modifier.width(300.dp) // Give it a fixed width for the "paper" look
-                        ) {
-                            Text(
-                                text = note.title,
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                text = note.content,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
+                    exportTarget?.let { note ->
+                        MaterialTheme(colorScheme = lightColorScheme()) {
+                            @OptIn(ExperimentalComposeUiApi::class)
+                            Box(
+                                modifier = Modifier
+                                    .wrapContentSize(unbounded = true)
+                                    .background(Color.White)
+                                    .capturable(captureController)
+                                    .padding(32.dp)
+                            ) {
+                                NoteContent(
+                                    noteTitle = note.title,
+                                    onNoteTitleChange = {},
+                                    noteContent = note.content,
+                                    onNoteContentChange = {},
+                                    importedElements = note.elements,
+                                    onImportedElementsChange = {},
+                                    panOffset = Offset.Zero,
+                                    onPanOffsetChange = {},
+                                    zoomScale = 1f,
+                                    onZoomScaleChange = {},
+                                    isDrawingMode = false,
+                                    currentTool = "Pen",
+                                    currentPathPoints = emptyList(),
+                                    onCurrentPathPointsChange = {},
+                                    strokeColor = Color.Black,
+                                    isExporting = true
+                                )
+                            }
                         }
                     }
                 }
 
                 Popup(
                     alignment = Alignment.Center,
-                    onDismissRequest = { showExportPopup = false }
+                    onDismissRequest = { exportTarget = null }
                 ) {
                     Box(
                         modifier = Modifier
                             .width(240.dp)
                             .shadow(8.dp, MaterialTheme.shapes.medium)
                             .background(MaterialTheme.colorScheme.surface, MaterialTheme.shapes.medium)
-                            .border(
-                                width = 1.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant,
-                                shape = MaterialTheme.shapes.medium
-                            )
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
                             .padding(16.dp)
                     ) {
                         Column {
@@ -669,8 +954,8 @@ class MainActivity : ComponentActivity() {
                                 onClick = {
                                     scope.launch {
                                         val bitmap = captureController.captureAsync().await()
-                                        saveAsPdf(bitmap.asAndroidBitmap(), context, noteToExport?.title ?: "Note")
-                                        showExportPopup = false
+                                        saveAsPdf(bitmap.asAndroidBitmap(), context, exportTarget?.title ?: "Note")
+                                        exportTarget = null
                                     }
                                 }
                             )
@@ -679,201 +964,24 @@ class MainActivity : ComponentActivity() {
                                 onClick = {
                                     scope.launch {
                                         val bitmap = captureController.captureAsync().await()
-                                        saveAsPng(bitmap.asAndroidBitmap(), context, noteToExport?.title ?: "Note")
-                                        showExportPopup = false
+                                        saveAsPng(bitmap.asAndroidBitmap(), context, exportTarget?.title ?: "Note")
+                                        exportTarget = null
                                     }
                                 }
                             )
                             DropdownMenuItem(
                                 text = { Text("Export as Text") },
                                 onClick = {
-                                    noteToExport?.let { note ->
+                                    exportTarget?.let { note ->
                                         saveAsText(context, note.title, note.content)
                                     }
-                                    showExportPopup = false
+                                    exportTarget = null
                                 }
                             )
                         }
                     }
                 }
             }
-        }
-    }
-
-    private fun saveAsPng(bitmap: Bitmap, context: Context, title: String) {
-        val softwareBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bitmap.config == Bitmap.Config.HARDWARE) {
-            bitmap.copy(Bitmap.Config.ARGB_8888, false)
-        } else {
-            bitmap
-        }
-        val filename = "${title}_${System.currentTimeMillis()}.png"
-        val outputStream: OutputStream?
-
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
-                }
-                val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
-                outputStream = uri?.let { context.contentResolver.openOutputStream(it) }
-            } else {
-                val imagesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
-                val image = File(imagesDir, filename)
-                outputStream = FileOutputStream(image)
-            }
-
-            outputStream?.use {
-                softwareBitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
-                Toast.makeText(context, "Saved to Pictures", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "Failed to save image", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun saveAsPdf(bitmap: Bitmap, context: Context, title: String) {
-        val softwareBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bitmap.config == Bitmap.Config.HARDWARE) {
-            bitmap.copy(Bitmap.Config.ARGB_8888, false)
-        } else {
-            bitmap
-        }
-        val filename = "${title}_${System.currentTimeMillis()}.pdf"
-        val pdfDocument = PdfDocument()
-        val pageInfo = PdfDocument.PageInfo.Builder(softwareBitmap.width, softwareBitmap.height, 1).create()
-        val page = pdfDocument.startPage(pageInfo)
-
-        val canvas = page.canvas
-        canvas.drawBitmap(softwareBitmap, 0f, 0f, null)
-        pdfDocument.finishPage(page)
-
-        val outputStream: OutputStream?
-
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                }
-                val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
-                outputStream = uri?.let { context.contentResolver.openOutputStream(it) }
-            } else {
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val pdfFile = File(downloadsDir, filename)
-                outputStream = FileOutputStream(pdfFile)
-            }
-
-            outputStream?.use {
-                pdfDocument.writeTo(it)
-                Toast.makeText(context, "Saved to Downloads", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "Failed to save PDF", Toast.LENGTH_SHORT).show()
-        } finally {
-            pdfDocument.close()
-        }
-    }
-
-    private fun saveAsText(context: Context, title: String, content: String) {
-        val filename = "${title}_${System.currentTimeMillis()}.txt"
-        val outputStream: OutputStream?
-
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                }
-                val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
-                outputStream = uri?.let { context.contentResolver.openOutputStream(it) }
-            } else {
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val textFile = File(downloadsDir, filename)
-                outputStream = FileOutputStream(textFile)
-            }
-
-            outputStream?.use {
-                it.write(content.toByteArray())
-                Toast.makeText(context, "Saved to Downloads", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "Failed to save Text file", Toast.LENGTH_SHORT).show()
-        }
-    }
-}
-
-@Composable
-fun SettingsView(modifier: Modifier = Modifier) {
-    HorizontalDivider()
-    Column(
-        modifier = modifier
-            .padding(16.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("Dark Mode")
-            // Add a Switch or other controls here
-        }
-
-    }
-}
-
-@Composable
-fun HelpFeedbackView(modifier: Modifier = Modifier) {
-    var feedbackText by remember { mutableStateOf("") }
-    val context = LocalContext.current
-    HorizontalDivider()
-    Column(
-        modifier = modifier
-            .padding(16.dp)
-    ) {
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Tell us what you think or report an issue:",
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-
-        TextField(
-            value = feedbackText,
-            onValueChange = { feedbackText = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            placeholder = { Text("Enter your feedback here...") },
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-            )
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                if (feedbackText.isNotBlank()) {
-                    Toast.makeText(context, "Feedback submitted! Thank you.", Toast.LENGTH_SHORT).show()
-                    feedbackText = ""
-                } else {
-                    Toast.makeText(context, "Please enter some feedback.", Toast.LENGTH_SHORT).show()
-                }
-            },
-            modifier = Modifier.align(Alignment.End)
-        ) {
-            Text("Submit")
         }
     }
 }
