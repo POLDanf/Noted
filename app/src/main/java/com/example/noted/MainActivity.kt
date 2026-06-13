@@ -95,6 +95,11 @@ import com.example.noted.ui.components.NoteContent
 import com.example.noted.utils.copyUriToInternalStorage
 import com.example.noted.utils.saveAsPng
 import com.example.noted.utils.saveAsPdf
+import com.example.noted.utils.saveAsJPEG
+import com.example.noted.utils.saveAsMarkdown
+import com.example.noted.utils.saveAsHtml
+import com.example.noted.utils.saveAsJson
+import com.example.noted.utils.saveAsZip
 import com.example.noted.utils.saveAsText
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -875,7 +880,6 @@ class MainActivity : ComponentActivity() {
                     ) {
                         Column {
                             Text(
-                                // FIX 3: Show the target note's title in the share header for clarity.
                                 "Share \"${exportTarget?.title ?: "Note"}\"",
                                 style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier.padding(bottom = 8.dp)
@@ -977,6 +981,52 @@ class MainActivity : ComponentActivity() {
                                         saveAsPng(bitmap.asAndroidBitmap(), context, exportTarget?.title ?: "Note")
                                         exportTarget = null
                                     }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export as JPEG") },
+                                onClick = {
+                                    scope.launch {
+                                        val bitmap = captureController.captureAsync().await()
+                                        saveAsJPEG(bitmap.asAndroidBitmap(), context, exportTarget?.title ?: "Note")
+                                        exportTarget = null
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export as Markdown") },
+                                onClick = {
+                                    exportTarget?.let { note ->
+                                        saveAsMarkdown(context, note.title, note.content)
+                                    }
+                                    exportTarget = null
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export as HTML") },
+                                onClick = {
+                                    exportTarget?.let { note ->
+                                        saveAsHtml(context, note)
+                                    }
+                                    exportTarget = null
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export as JSON") },
+                                onClick = {
+                                    exportTarget?.let { note ->
+                                        saveAsJson(context, note)
+                                    }
+                                    exportTarget = null
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export as ZIP") },
+                                onClick = {
+                                    exportTarget?.let { note ->
+                                        saveAsZip(context, note)
+                                    }
+                                    exportTarget = null
                                 }
                             )
                             DropdownMenuItem(
